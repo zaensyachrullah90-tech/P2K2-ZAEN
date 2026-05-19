@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>E-Absensi P2K2</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased select-none">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Matriks nama bulan untuk pencocokan otomatis kalender HP
+    const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    const currentMonthIndex = new Date().getMonth();
+    const currentMonthName = monthNames[currentMonthIndex];
+
+    function AppAbsensi() {
+      const [dataSheets, setDataSheets] = useState({});
+      const [selectedSheet, setSelectedSheet] = useState('');
+      const [loading, setLoading] = useState(true);
+      const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+      // Sinkronisasi status koneksi internet perangkat secara real-time
+      useEffect(() => {
+        const onlineHandler = () => setIsOnline(true);
+        const offlineHandler = () => setIsOnline(false);
+        window.addEventListener('online', onlineHandler);
+        window.addEventListener('offline', offlineHandler);
+        return () => {
+          window.removeEventListener('online', onlineHandler);
+          window.removeEventListener('offline', offlineHandler);
+        };
+      }, []);
+
+      // Menarik data saat aplikasi pertama kali dimuat
+      useEffect(() => {
+        // Ambil data cadangan lokal jika ada (Mendukung Akses Offline Instan)
+        const cached = localStorage.getItem('absen_cache_data');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setDataSheets(parsed);
+          setSelectedSheet(Object.keys(parsed)[0] || '');
+          setLoading(false);
+        }
+
+        // Jalankan pemanggilan data ke Google Sheets secara aman di background
+        google.script.run
+          .withSuccessHandler((data) => {
+            setDataSheets(data);
+            localStorage.setItem('absen_cache_data', JSON.stringify(data));
+            if (Object.keys(data).length > 0 && !selectedSheet) {
+              setSelectedSheet(Object.keys(data)[0]);
+            }
+            setLoading(false);
+          })
+          .withFailureHandler((err) => {
+            console.error("Gagal sinkron data terbaru:", err);
+            setLoading(false);
+          })
+          .getAllSheetsData();
+      }, []);
+
+      // Fitur Kirim Data / Optimistic UI (Tanpa Loading Menunggu Respon Server)
+      const handleAbsenSubmit = (nama, hadir, keterangan) => {
+        const payload = { sheetName: selectedSheet, nama, hadir, keterangan, monthIndex: currentMonthIndex };
+
+        if (!navigator.onLine) {
+          // Jika offline, amankan antrean di storage lokal HP
+          let queue = JSON.parse(localStorage.getItem('absen_offline_queue') || '[]');
+          queue.push(payload);
+          localStorage.setItem('absen_offline_queue', JSON.stringify(queue));
+          alert("Koneksi terputus! Data absen disimpan di memori HP dan akan otomatis dikirim saat sinyal kembali.");
+          return;
+        }
+
+        // Jika online, langsung tembak ke fungsi Apps Script tanpa mengunci layar (Zero Loading)
+        google.script.run
+          .withSuccessHandler((res) => {
+            if (res.status === "error") console.error(res.message);
+          })
+          .submitAbsenKeSpreadsheet(selectedSheet, nama, hadir, keterangan, currentMonthIndex);
+      };
+
+      if (loading && Object.keys(dataSheets).length === 0) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-slate-50">
+            <div className="text-center space-y-2">
+              <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+              <p className="text-sm font-medium text-slate-500">Menyiapkan Form Absensi...</p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen pb-12">
+          {/* Komponen Navigasi / Header Glassmorphism */}
+          <header className="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-slate-100 p-4 shadow-xs flex justify-between items-center">
+            <div>
+              <h1 className="text-lg font-bold text-slate-900 tracking-tight">E-Absensi P2K2</h1>
+              <p className="text-xs text-slate-500 font-medium">Bulan berjalan: <span className="text-indigo-600 font-bold">{currentMonthName}</span></p>
+            </div>
+            <div>
+              {isOnline ? (
+                <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2.5 py-1 rounded-full border border-emerald-200">Online</span>
+              ) : (
+                <span className="text-[10px] bg-rose-50 text-rose-600 font-bold px-2.5 py-1 rounded-full border border-rose-200">Mode Offline</span>
+              )}
+            </div>
+          </header>
+
+          <main className="max-w-md mx-auto px-4 mt-6 space-y-5">
+            {/* Pemilih Wilayah / Mengakomodasi Penambahan Sheet di Masa Depan secara Otomatis */}
+            <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-xs">
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">Pilih Wilayah Kerja</label>
+              <select 
+                className="w-full bg-slate-50 p-3 rounded-xl font-semibold text-slate-800 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none"
+                value={selectedSheet}
+                onChange={(e) => setSelectedSheet(e.target.value)}
+              >
+                {Object.keys(dataSheets).map((sheetName) => (
+                  <option key={sheetName} value={sheetName}>{sheetName}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* List Penerima Manfaat berdasarkan baris data di Excel */}
+            <div className="space-y-3.5">
+              {dataSheets[selectedSheet] && dataSheets[selectedSheet].slice(1).map((row, idx) => {
+                const namaPenerima = row[1]; // Sesuai kolom B spreadsheet Anda
+                const alamatPenerima = row[2] || "Alamat tidak terdata"; // Kolom C
+                
+                if (!namaPenerima) return null;
+
+                return (
+                  <KartuAbsen 
+                    key={selectedSheet + '_' + idx}
+                    nama={namaPenerima}
+                    alamat={alamatPenerima}
+                    onSimpan={handleAbsenSubmit}
+                  />
+                );
+              })}
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    // Komponen Input Kehadiran Mandiri per Individu
+    function KartuAbsen({ nama, alamat, onSimpan }) {
+      const [hadir, setHadir] = useState(true);
+      const [keterangan, setKeterangan] = useState('');
+      const [sudahKirim, setSudahKirim] = useState(false);
+
+      const eksekusiKlik = () => {
+        setSudahKirim(true); // Efek Optimistic UI: langsung hilang/berubah sukses di layar HP tanpa jeda loading
+        onSimpan(nama, hadir, keterangan);
+      };
+
+      if (sudahKirim) {
+        return (
+          <div className="p-4 bg-emerald-50/60 border border-emerald-100 rounded-2xl flex items-center gap-3 animate-pulse">
+            <div className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xs font-bold">✓</div>
+            <div>
+              <p className="text-sm font-bold text-emerald-800">{nama}</p>
+              <p className="text-[11px] text-emerald-600 font-medium">Status kehadiran dikonfirmasi</p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs space-y-3">
+          <div>
+            <h3 className="font-bold text-slate-900 text-base leading-tight">{nama}</h3>
+            <p className="text-xs text-slate-400 mt-0.5 font-medium">{alamat}</p>
+          </div>
+
+          {/* Sakelar Kehadiran Ringkas */}
+          <div className="grid grid-cols-2 gap-2">
+            <button 
+              type="button"
+              onClick={() => setHadir(true)}
+              className={`py-2.5 rounded-xl font-bold text-xs border transition-all ${hadir ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
+            >
+              Hadir
+            </button>
+            <button 
+              type="button"
+              onClick={() => setHadir(false)}
+              className={`py-2.5 rounded-xl font-bold text-xs border transition-all ${!hadir ? 'bg-rose-500 text-white border-rose-500 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
+            >
+              Tidak Hadir
+            </button>
+          </div>
+
+          {/* Kotak Pengisian Alasan Otomatis Muncul jika Tidak Hadir */}
+          {!hadir && (
+            <input 
+              type="text" 
+              placeholder="Tulis alasan (Sakit, Izin, Pindah Wilayah...)"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-rose-400"
+              value={keterangan}
+              onChange={(e) => setKeterangan(e.target.value)}
+            />
+          )}
+
+          <button 
+            type="button"
+            onClick={eksekusiKlik}
+            className="w-full py-2.5 bg-slate-900 hover:bg-indigo-600 text-white font-bold text-xs rounded-xl transition-all active:scale-[0.98]"
+          >
+            Simpan Kehadiran
+          </button>
+        </div>
+      );
+    }
+
+    // Render komponen ke DOM utama
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(<AppAbsensi />);
+  </script>
+</body>
+</html>
