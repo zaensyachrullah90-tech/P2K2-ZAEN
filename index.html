@@ -2,47 +2,50 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>E-Absensi P2K2 - Vercel Engine</title>
+  <title>Dashboard SDM P2K2 Terpadu</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- Tailwind CSS v4 & React CDN Blueprint -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Feather Icons untuk Visual Dashboard -->
+  <script src="https://unpkg.com/feather-icons"></script>
 </head>
-<body class="bg-slate-50 text-slate-800 font-sans antialiased select-none">
+<body class="bg-[#f4f7fe] text-slate-800 font-sans antialiased select-none">
 
   <div id="root"></div>
 
   <script type="text/babel">
     const { useState, useEffect } = React;
 
-    // === PENTING: GANTI DENGAN URL WEB APP GOOGLE APPS SCRIPT ANDA ===
+    // === MASUKKAN URL APPS SCRIPT DI SINI ===
     const GAS_URL = "https://script.google.com/macros/s/AKfycbxS9UD8eLc64UpwbfCk4OVOqtQxyQi2EZFJBzjiTa8TWCYL3CEQECRU9TjJZXMK962enQ/exec";
 
     const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
     const currentMonthIndex = new Date().getMonth();
-    const currentMonthName = monthNames[currentMonthIndex];
 
     function AppAbsensi() {
       const [dataSheets, setDataSheets] = useState({});
       const [selectedSheet, setSelectedSheet] = useState('');
+      const [selectedMonth, setSelectedMonth] = useState(currentMonthIndex);
       const [loading, setLoading] = useState(true);
       const [isOnline, setIsOnline] = useState(navigator.onLine);
+      const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' atau 'list'
+      const [profileData, setProfileData] = useState(null);
 
       useEffect(() => {
+        feather.replace();
         const goOnline = () => setIsOnline(true);
         const goOffline = () => setIsOnline(false);
         window.addEventListener('online', goOnline);
         window.addEventListener('offline', goOffline);
-        return () => {
-          window.removeEventListener('online', goOnline);
-          window.removeEventListener('offline', goOffline);
-        };
+        return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
       }, []);
 
+      // Mesin Penarik Data (Dengan Cache Lokal PWA-like)
       useEffect(() => {
-        // Ambil dari LocalStorage jika offline (Kebal Blank Spot Sinyal)
-        const cached = localStorage.getItem('v_absen_cache');
+        const cached = localStorage.getItem('v2_pkh_data');
         if (cached) {
           const parsed = JSON.parse(cached);
           setDataSheets(parsed);
@@ -50,179 +53,262 @@
           setLoading(false);
         }
 
-        // Ambil data real-time via API fetch
-        fetch(GAS_URL, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'get_data' })
-        })
+        fetch(GAS_URL, { method: 'POST', body: JSON.stringify({ action: 'get_data' }) })
         .then(res => res.json())
         .then(resData => {
           if (resData.status === "success") {
             setDataSheets(resData.data);
-            localStorage.setItem('v_absen_cache', JSON.stringify(resData.data));
+            localStorage.setItem('v2_pkh_data', JSON.stringify(resData.data));
             if (Object.keys(resData.data).length > 0 && !selectedSheet) {
               setSelectedSheet(Object.keys(resData.data)[0]);
             }
           }
           setLoading(false);
-        })
-        .catch(err => {
-          console.log("Mode Offline Aktif");
-          setLoading(false);
-        });
+        }).catch(err => setLoading(false));
       }, []);
 
-      const handleAbsenSubmit = (nama, hadir, keterangan) => {
-        const payload = { action: 'submit_absen', sheetName: selectedSheet, nama, hadir, keterangan, monthIndex: currentMonthIndex };
+      // Eksekutor Update Database (Menerima array updates untuk mendukung multi-kolom)
+      const handleDataSubmit = (nama, updatesArray) => {
+        const payload = { action: 'submit_update', sheetName: selectedSheet, nama, updates: updatesArray };
+
+        // Modifikasi Local State langsung agar UI langsung berubah (Optimistic UI 1-Click)
+        const updatedSheets = { ...dataSheets };
+        const sheetData = updatedSheets[selectedSheet];
+        const rowIndex = sheetData.rows.findIndex(r => r[1] === nama);
+        if(rowIndex > -1) {
+            updatesArray.forEach(upd => {
+                sheetData.rows[rowIndex][upd.colIndex] = upd.value;
+            });
+            setDataSheets(updatedSheets);
+            localStorage.setItem('v2_pkh_data', JSON.stringify(updatedSheets));
+        }
 
         if (!navigator.onLine) {
-          let queue = JSON.parse(localStorage.getItem('v_absen_queue') || '[]');
+          let queue = JSON.parse(localStorage.getItem('v2_absen_queue') || '[]');
           queue.push(payload);
-          localStorage.setItem('v_absen_queue', JSON.stringify(queue));
-          alert("Data tersimpan di memori lokal HP! Akan otomatis disinkronkan saat Anda kembali mendapatkan sinyal internet.");
+          localStorage.setItem('v2_absen_queue', JSON.stringify(queue));
           return;
         }
 
-        // Kirim data senyap di background (Zero Loading / Tanpa Loading Screen)
-        fetch(GAS_URL, {
-          method: 'POST',
-          body: JSON.stringify(payload)
-        })
-        .then(res => res.json())
-        .then(res => {
-          if (res.status === "error") alert("Gagal memperbarui database: " + res.message);
-        })
-        .catch(err => console.error("Koneksi bermasalah:", err));
+        fetch(GAS_URL, { method: 'POST', body: JSON.stringify(payload) })
+        .catch(err => console.error("Mode Luring Aktif:", err));
       };
 
       if (loading && Object.keys(dataSheets).length === 0) {
         return (
-          <div className="min-h-screen flex items-center justify-center bg-slate-50">
-            <div className="text-center space-y-2">
-              <div className="w-9 h-9 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-              <p className="text-xs font-semibold text-slate-400">Menghubungkan ke Database PKH...</p>
-            </div>
+          <div className="min-h-screen flex items-center justify-center bg-[#f4f7fe]">
+            <div className="w-10 h-10 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
           </div>
         );
       }
 
+      const activeData = dataSheets[selectedSheet];
+      const headers = activeData ? activeData.headers : [];
+      const rows = activeData ? activeData.rows : [];
+      
+      // Deteksi dinamis index kolom bulan
+      const monthColIndex = headers.findIndex(h => h && h.toString().toUpperCase().trim() === monthNames[selectedMonth]);
+
+      // Perhitungan Analitik Dashboard
+      let totalData = 0, hadir = 0, absen = 0, belum = 0;
+      if (monthColIndex !== -1) {
+        rows.forEach(r => {
+          if(!r[1]) return; // Skip baris kosong
+          totalData++;
+          const status = (r[monthColIndex] || "").toString().toLowerCase();
+          if (status === "hadir") hadir++;
+          else if (status.includes("tidak") || status.includes("sakit") || status.includes("izin") || status.includes("absen")) absen++;
+          else belum++;
+        });
+      }
+
       return (
-        <div className="min-h-screen pb-12">
-          {/* Header Efek Glossy / Glassmorphism */}
-          <header className="sticky top-0 z-50 bg-white/70 backdrop-blur-md border-b border-slate-100 p-4 shadow-xs flex justify-between items-center">
+        <div className="min-h-screen pb-24 relative">
+          {/* Top Header Glassmorphism */}
+          <header className="sticky top-0 z-40 bg-white/60 backdrop-blur-xl border-b border-white/50 p-4 shadow-sm flex justify-between items-center rounded-b-2xl mb-4">
             <div>
-              <h1 className="text-base font-bold text-slate-900 tracking-tight">E-Absensi Portal</h1>
-              <p className="text-[11px] text-slate-400 font-medium">Bulan Kehadiran: <span className="text-indigo-600 font-bold">{currentMonthName}</span></p>
-            </div>
-            <div>
-              {isOnline ? (
-                <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2.5 py-1 rounded-full border border-emerald-200">Koneksi Stabil</span>
-              ) : (
-                <span className="text-[10px] bg-rose-50 text-rose-600 font-bold px-2.5 py-1 rounded-full border border-rose-200">Offline Mode</span>
-              )}
+              <h1 className="text-lg font-bold bg-gradient-to-r from-purple-700 to-indigo-600 bg-clip-text text-transparent tracking-tight">E-SDM PKH Pro</h1>
+              <div className="flex gap-2 items-center mt-0.5">
+                {isOnline ? (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                ) : (
+                  <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                )}
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isOnline ? 'Sistem Aktif' : 'Mode Offline'}</p>
+              </div>
             </div>
           </header>
 
-          <main className="max-w-md mx-auto px-4 mt-5 space-y-4">
-            {/* Dropdown Wilayah */}
-            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 ml-1">Pilih Kelompok / Sheet</label>
-              <select 
-                className="w-full bg-slate-50 p-2.5 rounded-lg font-bold text-sm text-slate-800 border border-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                value={selectedSheet}
-                onChange={(e) => setSelectedSheet(e.target.value)}
-              >
-                {Object.keys(dataSheets).map((name) => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
+          <main className="max-w-md mx-auto px-4 space-y-5">
+            {/* Filter Global: Wilayah & Bulan */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/80 p-1.5 rounded-2xl shadow-sm border border-slate-100">
+                <select className="w-full bg-transparent p-2 text-xs font-bold text-slate-700 focus:outline-none appearance-none text-center"
+                  value={selectedSheet} onChange={(e) => setSelectedSheet(e.target.value)}>
+                  {Object.keys(dataSheets).map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </div>
+              <div className="bg-white/80 p-1.5 rounded-2xl shadow-sm border border-slate-100">
+                <select className="w-full bg-transparent p-2 text-xs font-bold text-purple-700 focus:outline-none appearance-none text-center"
+                  value={selectedMonth} onChange={(e) => setSelectedMonth(Number(e.target.value))}>
+                  {monthNames.map((m, idx) => <option key={m} value={idx}>Bulan: {m}</option>)}
+                </select>
+              </div>
             </div>
 
-            {/* List Data Penerima */}
-            <div className="space-y-3">
-              {dataSheets[selectedSheet] && dataSheets[selectedSheet].slice(1).map((row, idx) => {
-                const nama = row[1];
-                const alamat = row[2] || "Alamat belum diatur";
-                if (!nama) return null;
+            {/* Area Konten Utama */}
+            {activeTab === 'dashboard' ? (
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-5 rounded-3xl shadow-lg shadow-purple-200 text-white col-span-2 relative overflow-hidden">
+                     <div className="relative z-10">
+                       <p className="text-sm font-medium text-purple-100">Total KPM Terdaftar</p>
+                       <h2 className="text-4xl font-black mt-1">{totalData}</h2>
+                       <p className="text-xs text-purple-200 mt-2">Area {selectedSheet} • {monthNames[selectedMonth]}</p>
+                     </div>
+                     <div className="absolute -right-4 -bottom-4 opacity-20">
+                       <i data-feather="users" className="w-32 h-32"></i>
+                     </div>
+                  </div>
+                  
+                  <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between">
+                    <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 mb-2">
+                       <i data-feather="check" className="w-4 h-4"></i>
+                    </div>
+                    <p className="text-3xl font-black text-slate-800">{hadir}</p>
+                    <p className="text-xs font-bold text-slate-400 mt-1">Total Hadir</p>
+                  </div>
 
-                return (
-                  <CardKomponen 
-                    key={selectedSheet + '-' + idx}
-                    nama={nama}
-                    alamat={alamat}
-                    onSimpan={handleAbsenSubmit}
-                  />
-                );
-              })}
-            </div>
+                  <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between">
+                    <div className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 mb-2">
+                       <i data-feather="x" className="w-4 h-4"></i>
+                    </div>
+                    <p className="text-3xl font-black text-slate-800">{absen}</p>
+                    <p className="text-xs font-bold text-slate-400 mt-1">Tidak Hadir</p>
+                  </div>
+                  
+                  <div className="bg-slate-800 p-4 rounded-2xl shadow-sm text-center col-span-2 flex justify-between items-center px-6">
+                     <p className="text-xs font-bold text-slate-300">Belum di-absen:</p>
+                     <p className="text-lg font-black text-amber-400">{belum} KPM</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                {rows.map((row, idx) => {
+                  const nama = row[1];
+                  const alamat = row[2] || "Alamat tidak tersedia";
+                  if (!nama) return null;
+                  
+                  const statusKehadiran = monthColIndex !== -1 ? (row[monthColIndex] || "").toString() : "";
+                  const isHadir = statusKehadiran === "Hadir";
+                  const isAbsen = statusKehadiran.includes("Tidak") || statusKehadiran.includes("Sakit");
+
+                  return (
+                    <div key={idx} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
+                      {/* Klik nama untuk buka profil */}
+                      <div className="flex justify-between items-start cursor-pointer" onClick={() => setProfileData({ nama, alamat, rowData: row, rowIndex: idx })}>
+                        <div>
+                          <h3 className="font-bold text-slate-800 text-sm">{nama}</h3>
+                          <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{alamat}</p>
+                        </div>
+                        <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 hover:bg-purple-50 transition-colors">
+                           <i data-feather="chevron-right" className="w-4 h-4 text-purple-500"></i>
+                        </div>
+                      </div>
+                      
+                      {/* Tombol Absen 1-Click Cepat */}
+                      <div className="grid grid-cols-2 gap-2 mt-1">
+                        <button 
+                          onClick={() => handleDataSubmit(nama, [{ colIndex: monthColIndex, value: 'Hadir' }])}
+                          className={`py-2 rounded-xl text-xs font-bold transition-all active:scale-95 ${isHadir ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+                        >
+                          {isHadir ? '✓ Hadir' : 'Hadir'}
+                        </button>
+                        <button 
+                          onClick={() => {
+                            const alasan = prompt("Masukkan Keterangan (Sakit, Izin, Pindah):");
+                            if(alasan !== null) handleDataSubmit(nama, [{ colIndex: monthColIndex, value: 'Tidak Hadir: ' + (alasan||'Tanpa Keterangan') }]);
+                          }}
+                          className={`py-2 rounded-xl text-xs font-bold transition-all active:scale-95 ${isAbsen ? 'bg-rose-500 text-white shadow-md shadow-rose-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+                        >
+                          {isAbsen ? '× Absen' : 'Absen'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </main>
-        </div>
-      );
-    }
 
-    function CardKomponen({ nama, alamat, onSimpan }) {
-      const [hadir, setHadir] = useState(true);
-      const [keterangan, setKeterangan] = useState('');
-      const [terkirim, setTerkirim] = useState(false);
-
-      const handleKlik = () => {
-        setTerkirim(true); // Optimistic UI: langsung sukses di HP user tanpa jeda loading internet
-        onSimpan(nama, hadir, keterangan);
-      };
-
-      if (terkirim) {
-        return (
-          <div className="p-3.5 bg-emerald-50/70 border border-emerald-100 rounded-xl flex items-center gap-3 transition-all">
-            <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-bold">✓</div>
-            <div>
-              <p className="text-xs font-bold text-emerald-800">{nama}</p>
-              <p className="text-[10px] text-emerald-600">Berhasil diperbarui</p>
+          {/* Modal Profil & Dinamis Input Kolom Kosong */}
+          {profileData && (
+            <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+              <div className="bg-white w-full max-w-md h-[85vh] sm:h-auto sm:max-h-[90vh] rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-10">
+                <div className="p-5 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                  <div>
+                    <h2 className="font-black text-slate-800 text-lg">{profileData.nama}</h2>
+                    <p className="text-xs text-slate-500 font-medium">Profil & Kelengkapan Data</p>
+                  </div>
+                  <button onClick={() => setProfileData(null)} className="w-8 h-8 bg-slate-200 rounded-full flex items-center justify-center text-slate-600 font-bold hover:bg-rose-100 hover:text-rose-600 transition-colors">✕</button>
+                </div>
+                
+                <div className="p-5 overflow-y-auto flex-1 space-y-4">
+                   {/* Loop dinamis mencari kolom kosong berdasarkan Header */}
+                   {headers.map((hdr, hIdx) => {
+                     const isMonthCol = monthNames.includes(hdr?.toString().toUpperCase().trim());
+                     const isPrimary = hIdx === 0 || hIdx === 1; // Skip NO dan NAMA
+                     if (isMonthCol || isPrimary || !hdr) return null;
+                     
+                     const value = profileData.rowData[hIdx] || "";
+                     // Jika data kosong, tampilkan form input cerdas
+                     if (value === "") {
+                       return (
+                         <div key={hIdx} className="bg-amber-50/50 p-3 rounded-2xl border border-amber-100">
+                           <label className="block text-[10px] font-bold text-amber-600 uppercase mb-2">Lengkapi Data: {hdr}</label>
+                           <input 
+                             type="text" 
+                             placeholder={`Masukkan ${hdr}...`}
+                             className="w-full bg-white p-2.5 rounded-xl border border-amber-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-400"
+                             onBlur={(e) => {
+                               if(e.target.value) {
+                                 handleDataSubmit(profileData.nama, [{ colIndex: hIdx, value: e.target.value }]);
+                                 e.target.classList.add('border-emerald-400', 'bg-emerald-50'); // Feedback visual instan
+                               }
+                             }}
+                           />
+                         </div>
+                       );
+                     }
+                     // Jika sudah ada isinya, tampilkan sebagai info statis
+                     return (
+                       <div key={hIdx} className="border-b border-slate-100 pb-2">
+                         <p className="text-[10px] font-bold text-slate-400 uppercase">{hdr}</p>
+                         <p className="text-sm font-semibold text-slate-700 mt-0.5">{value}</p>
+                       </div>
+                     );
+                   })}
+                </div>
+              </div>
             </div>
-          </div>
-        );
-      }
-
-      return (
-        <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-xs space-y-3">
-          <div>
-            <h3 className="font-bold text-slate-900 text-sm">{nama}</h3>
-            <p className="text-[11px] text-slate-400 font-medium">{alamat}</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              type="button" 
-              onClick={() => setHadir(true)}
-              className={`py-2 rounded-lg font-bold text-xs border transition-all ${hadir ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
-            >
-              Hadir
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setHadir(false)}
-              className={`py-2 rounded-lg font-bold text-xs border transition-all ${!hadir ? 'bg-rose-500 text-white border-rose-500 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
-            >
-              Absen
-            </button>
-          </div>
-
-          {!hadir && (
-            <input 
-              type="text" 
-              placeholder="Sakit, Izin, Tanpa Kabar..."
-              className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              value={keterangan}
-              onChange={(e) => setKeterangan(e.target.value)}
-            />
           )}
 
-          <button 
-            type="button" 
-            onClick={handleKlik}
-            className="w-full py-2 bg-slate-900 text-white font-bold text-xs rounded-lg hover:bg-indigo-600 transition-all active:scale-[0.99]"
-          >
-            Kunci Kehadiran
-          </button>
+          {/* Bottom Floating Navigation bar */}
+          <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white rounded-full px-4 py-2.5 shadow-2xl shadow-purple-900/30 flex gap-2 z-40 border border-slate-700/50 backdrop-blur-xl">
+             <button 
+               onClick={() => setActiveTab('dashboard')} 
+               className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all ${activeTab === 'dashboard' ? 'bg-purple-600' : 'hover:bg-slate-800 text-slate-400'}`}
+             >
+               <i data-feather="pie-chart" className="w-4 h-4"></i> Dashboard
+             </button>
+             <button 
+               onClick={() => setActiveTab('list')} 
+               className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all ${activeTab === 'list' ? 'bg-purple-600' : 'hover:bg-slate-800 text-slate-400'}`}
+             >
+               <i data-feather="list" className="w-4 h-4"></i> Input Absen
+             </button>
+          </nav>
         </div>
       );
     }
